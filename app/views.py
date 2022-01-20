@@ -1,13 +1,14 @@
 from django.shortcuts import render, get_object_or_404
 from .models import Post, Comment
-from django.core.paginator import Paginator, EmptyPage, \
-    PageNotAnInteger
+from django.core.paginator import Paginator, EmptyPage, PageNotAnInteger
 from django.views.generic import ListView
-from .forms import EmailPostForm, CommentForm
+from .forms import EmailPostForm, CommentForm, SearchForm
 from django.core.mail import send_mail
 from django.conf import settings
 from taggit.models import Tag
 from django.db.models import Count  # Count is an aggregation function like Avg, Min, Max, Count
+from django.contrib.postgres.search import SearchVector, SearchQuery, SearchRank
+from django.contrib.postgres.search import TrigramSimilarity
 
 
 def post_share(request, post_id):
@@ -92,10 +93,31 @@ def post_detail(request, year, month, day, post):
     similar_posts = Post.published.filter(tags__in=post_tags_ids) \
         .exclude(id=post.id)
     similar_posts = similar_posts.annotate(same_tags=Count('tags')) \
-        .order_by('-same_tags', '-publish')[:4]
+                        .order_by('-same_tags', '-publish')[:4]
 
     return render(request, 'app/post/detail.html', {'post': post,
                                                     'comments': comments,
                                                     'comment_form': comment_form,
                                                     'new_comment': new_comment,
                                                     'similar_posts': similar_posts, })
+
+
+def post_search(request):
+    form = SearchForm()
+    query = None
+    results = []
+    if 'query' in request.GET:
+        form = SearchForm(request.GET)
+        if form.is_valid():
+            query = form.cleaned_data['query']
+            search_vector = SearchVector('title', weight='A') + \
+                                SearchVector('body', weight='B')
+            search_query = SearchQuery(query)
+            results = Post.published.annotate(
+                similarity=TrigramSimilarity('title', query),
+            ).filter(similarity__gt=0.1).order_by('-similarity')
+    return render(request,
+                  'app/post/search.html',
+                  {'form': form,
+                   'query': query,
+                   'results': results})
